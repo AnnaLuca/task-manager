@@ -1,0 +1,138 @@
+# ===========================================================================
+# stack.yml - DEPLOYMENT TO DOCKER SWARM
+#
+#   printf 'StrongPassword123' | docker secret create db_password -
+#   docker stack deploy -c stack.yml project
+#
+# Differences from compose.yml:
+#   - no "build:": Swarm does NOT build images, it pulls ready-made ones
+#   - "deploy:" block: replicas, restart policy, update strategy
+#   - overlay networks (virtual networks that can span multiple machines)
+#   - the secret is "external": created beforehand, inside the Swarm
+#   - no depends_on (Swarm ignores it)
+# ===========================================================================
+
+services:
+
+  # --- 1. FRONTEND: Nginx - UI + reverse proxy, the ONLY public entry point
+  frontend:
+    image: ${IMAGE_PREFIX:-ghcr.io/username}/task-manager-frontend:${TAG:-1.0.0}
+    ports:
+      - target: 80          # port inside the container
+        published: 8080     # port exposed on the machine (node)
+        mode: ingress       # routing mesh: a request hitting any node reaches any replica
+    networks: [frontend-net]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    deploy:
+      replicas: 2                       # stateless -> safe to run several copies
+      restart_policy:
+        condition: on-failure           # if the container exits with an error, Swarm starts a new one
+        delay: 5s
+        max_attempts: 10
+        window: 60s
+      update_config:                    # rolling update: replace 1 replica at a time
+        parallelism: 1
+        delay: 10s
+        order: start-first              # start the new one first, only then stop the old one
+        failure_action: rollback
+      rollback_config:
+        parallelism: 1
+      resources:
+        limits: { cpus: "0.50", memory: 128M }
+
+  # --- 2. API: FastAPI - business logic
+  api:
+    image: ${IMAGE_PREFIX:-ghcr.io/username}/task-manager-api:${TAG:-1.0.0}
+    environment:
+      DB_HOST: db                       # the service name = DNS name on the overlay network
+      DB_NAME: tasks
+      DB_USER: tasks
+      DB_PASSWORD_FILE: /run/secrets/db_password
+    secrets: [db_password]
+    networks: [frontend-net, backend-net]   # the only service that sees both networks
+    # NO "ports": not reachable from outside, only through the frontend
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 30s
+    deploy:
+      replicas: 2                       # live demo: docker service scale project_api=3
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 10
+        window: 60s
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: start-first
+        failure_action: rollback
+      rollback_config:
+        parallelism: 1
+      resources:
+        limits: { cpus: "0.50", memory: 256M }
+
+  # --- 3. DB: PostgreSQL - persistent storage
+  db:
+    image: postgres:16.6-alpine
+    environment:
+      POSTGRES_DB: tasks
+      POSTGRES_USER: tasks
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+    secrets: [db_password]
+    volumes:
+      - db-data:/var/lib/postgresql/data   # survives deleting the container
+    networks: [backend-net]                # only the API can reach it
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tasks -d tasks"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 20s
+    deploy:
+      replicas: 1                       # stateful -> NOT replicated
+      placement:
+        constraints:
+          - node.role == manager        # always run on the node that holds the volume
+      restart_policy:
+        condition: any                  # the database should always be running
+        delay: 5s
+      update_config:
+        order: stop-first               # two Postgres instances must never write the same volume
+      resources:
+        limits: { cpus: "1.0", memory: 512M }
+
+  # --- (Optional) TryCloudflare tunnel - does NOT count as one of the 3 application services
+  # Find the public URL in the logs: docker service logs project_tunnel 2>&1 | grep trycloudflare
+  # If you prefer running it on your machine (cloudflared tunnel --url http://localhost:8080), delete this block.
+  tunnel:
+    image: cloudflare/cloudflared:2024.12.2
+    command: tunnel --no-autoupdate --url http://frontend:80
+    networks: [frontend-net]
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+
+networks:
+  frontend-net:
+    driver: overlay
+  backend-net:
+    driver: overlay
+    internal: true          # no route to the internet from this network
+
+volumes:
+  db-data:
+    driver: local
+
+secrets:
+  db_password:
+    external: true          # created beforehand: docker secret create db_password -

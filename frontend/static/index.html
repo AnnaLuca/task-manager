@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Task Manager - Docker Swarm project</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Task Manager</h1>
+      <p class="sub">Frontend (Nginx) → Backend (FastAPI) → Database (PostgreSQL), on Docker Swarm</p>
+    </header>
+
+    <section class="card">
+      <form id="new-task">
+        <input id="title" type="text" placeholder="New task, e.g. “Write the stack file”" maxlength="200" required>
+        <button type="submit">Add</button>
+      </form>
+      <div class="filters">
+        <button data-filter="all" class="active">All</button>
+        <button data-filter="todo">To do</button>
+        <button data-filter="in_progress">In progress</button>
+        <button data-filter="done">Done</button>
+      </div>
+      <ul id="tasks"></ul>
+      <p id="empty" class="muted" hidden>No tasks yet.</p>
+    </section>
+
+    <!-- This panel is for the demo: it shows which replica answered. -->
+    <section class="card infra">
+      <h2>Infrastructure</h2>
+      <dl>
+        <dt>Frontend replica</dt><dd id="fe-host">–</dd>
+        <dt>Last API replica</dt><dd id="api-host">–</dd>
+        <dt>API version</dt><dd id="api-version">–</dd>
+        <dt>Database</dt><dd id="db-status">–</dd>
+      </dl>
+      <button id="probe">Send 20 requests to the API</button>
+      <p class="muted">Shows how Swarm distributes requests across the API replicas.</p>
+      <ul id="probe-result"></ul>
+    </section>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>

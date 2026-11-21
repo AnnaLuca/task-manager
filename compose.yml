@@ -1,0 +1,78 @@
+# ===========================================================================
+# compose.yml - for LOCAL DEVELOPMENT and for BUILDING the images (Docker Compose)
+#
+#   docker compose up --build        # builds + starts the 3 services
+#   docker compose build             # build only
+#   docker compose push              # pushes our own images to the registry
+#   docker compose down              # stop (the volume is kept)
+#
+# Swarm deployment uses stack.yml, NOT this file.
+# ===========================================================================
+
+name: task-manager
+
+services:
+  frontend:
+    build: ./frontend
+    image: ${IMAGE_PREFIX:-ghcr.io/username}/task-manager-frontend:${TAG:-1.0.0}
+    ports:
+      - "8080:80"                    # the only port visible from outside the machine
+    networks: [frontend-net]
+    depends_on:
+      api:
+        condition: service_healthy   # works in Compose, NOT in Swarm!
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  api:
+    build:
+      context: ./api
+      args:
+        APP_VERSION: ${TAG:-1.0.0}
+    image: ${IMAGE_PREFIX:-ghcr.io/username}/task-manager-api:${TAG:-1.0.0}
+    environment:
+      DB_HOST: db
+      DB_NAME: tasks
+      DB_USER: tasks
+      DB_PASSWORD_FILE: /run/secrets/db_password
+    secrets: [db_password]
+    networks: [frontend-net, backend-net]
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 20s
+
+  db:
+    image: postgres:16.6-alpine
+    environment:
+      POSTGRES_DB: tasks
+      POSTGRES_USER: tasks
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+    secrets: [db_password]
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    networks: [backend-net]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tasks -d tasks"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+networks:
+  frontend-net: {}      # under Compose these are "bridge" networks (single host)
+  backend-net: {}
+
+volumes:
+  db-data: {}
+
+secrets:
+  db_password:
+    file: ./secrets/db_password.txt   # NOT in the repo (.gitignore), see README

@@ -1,0 +1,13 @@
+# Secrets - NEVER committed to the repo
+secrets/*.txt
+.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
